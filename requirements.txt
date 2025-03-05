@@ -9,3 +9,5 @@ PyMuPDF==1.23.22
 pydub==0.25.1
 SpeechRecognition==3.10.1
 Pillow==10.2.0
+anthropic==0.20.0
+requests==2.31.0
