@@ -5,6 +5,8 @@ import numpy as np
 import io
 import os
 import base64
+import json
+import time
 from datetime import datetime
 import tempfile
 import matplotlib.pyplot as plt
@@ -16,6 +18,8 @@ import docx
 import pptx
 import fitz  # PyMuPDF
 import re
+import requests
+import anthropic
 
 # Set page configuration
 st.set_page_config(
@@ -202,13 +206,174 @@ Let's talk numbers. We project gross sales of $5 million in the first year, base
 
 In conclusion, we're offering a solution to a widespread problem, with a compelling business model and sustainable finances. We're not just selling widgets - we're selling efficiency, time savings, and satisfaction. Thank you for your time, and I look forward to your questions."""
 
-def analyze_presentation(presentation_text, transcript):
+def analyze_presentation_with_claude(presentation_text, transcript):
     """
-    Analyze the presentation content and provide scores and feedback.
-    In a real application, this would use NLP and other analysis methods.
+    Analyze the presentation content using Claude API to provide intelligent assessment
+    and detailed feedback on the pitch.
     """
-    # For demonstration purposes, we'll use a simulated analysis
+    # Initialize Claude client from environment variable or Streamlit secrets
+    # You can store your API key in Streamlit's secrets.toml file
+    if 'CLAUDE_API_KEY' in st.secrets:
+        api_key = st.secrets['CLAUDE_API_KEY']
+    else:
+        api_key = os.environ.get('CLAUDE_API_KEY')
+        
+    if not api_key:
+        st.error("Claude API key not found. Please set the CLAUDE_API_KEY environment variable or add it to your secrets.toml file.")
+        st.stop()
+        
+    client = anthropic.Anthropic(api_key=api_key)
     
+    # Prepare the prompt with the presentation text and transcript
+    prompt = f"""
+    You are an expert at evaluating business pitches. You need to provide a comprehensive evaluation of a 4-minute pitch presentation based on its content.
+    
+    Here are the evaluation criteria for a 4-minute business pitch:
+    
+    1. Problem Framing (25%): 
+       - Clearly identifies a significant problem with compelling statistics and examples
+       - Uses statistics to demonstrate scale (e.g., 70% user dissatisfaction)
+       - Shows impact (e.g., businesses lose 20 hours per week)
+       - Explains who is affected
+    
+    2. Solution Framing (25%):
+       - Solution directly addresses identified problem
+       - Provides evidence of effectiveness (e.g., 50% time reduction, 95% satisfaction)
+       - Explains how solution works and its benefits
+       - Compares with alternatives or existing solutions
+    
+    3. Business Model (20%):
+       - Clear explanation of how the business makes money
+       - Shows market demand and customer base (e.g., 1 million potential users)
+       - Explains value proposition alignment
+       - Outlines customer acquisition strategy
+    
+    4. Financial Overview (20%):
+       - Includes gross sales projections (e.g., $5 million)
+       - Provides transaction estimates (e.g., 500,000)
+       - Shows COGS ($2 million), gross margin ($3 million)
+       - Details fixed costs ($1 million) and net profit ($2 million)
+    
+    5. Delivery & Impact (10%):
+       - Clear and concise delivery within 4-minute limit
+       - Effective use of slides and visual aids
+       - Verbal clarity and engagement
+       - Strong conclusion and call to action
+    
+    Below is the content from a pitch presentation and its transcript. Please evaluate it based on the criteria above.
+    
+    PRESENTATION CONTENT:
+    {presentation_text}
+    
+    PITCH TRANSCRIPT:
+    {transcript}
+    
+    Please provide:
+    1. Scores for each section (0-100)
+    2. Specific feedback for each section
+    3. An overall score (weighted according to the percentages)
+    4. Areas of strength
+    5. Suggestions for improvement
+    
+    Format your response as a JSON object with this structure:
+    {{
+        "overall": [overall score],
+        "sections": {{
+            "problem": {{
+                "score": [score],
+                "feedback": [specific feedback],
+                "strengths": [list of strengths],
+                "improvements": [list of suggestions]
+            }},
+            "solution": {{
+                "score": [score],
+                "feedback": [specific feedback],
+                "strengths": [list of strengths],
+                "improvements": [list of suggestions]
+            }},
+            "businessModel": {{
+                "score": [score],
+                "feedback": [specific feedback],
+                "strengths": [list of strengths],
+                "improvements": [list of suggestions]
+            }},
+            "financials": {{
+                "score": [score],
+                "feedback": [specific feedback],
+                "strengths": [list of strengths],
+                "improvements": [list of suggestions]
+            }},
+            "delivery": {{
+                "score": [score],
+                "feedback": [specific feedback],
+                "strengths": [list of strengths],
+                "improvements": [list of suggestions]
+            }}
+        }}
+    }}
+    
+    Return only the JSON object with no additional text.
+    """
+    
+    try:
+        # Call Claude API with a progress indicator
+        with st.spinner("Claude is analyzing your pitch..."):
+            response = client.messages.create(
+                model="claude-3-opus-20240229",  # Use the appropriate Claude model version
+                max_tokens=4000,
+                temperature=0.1,  # Low temperature for more consistent output
+                system="You are an expert at evaluating business pitches with deep experience in entrepreneurship, venture capital, and presentation skills. Provide detailed, insightful analysis based on the specified criteria.",
+                messages=[
+                    {"role": "user", "content": prompt}
+                ]
+            )
+            
+            # Extract the response text
+            result_text = response.content[0].text
+            
+            # Parse JSON response
+            # First, find JSON object in the response (in case Claude adds additional text)
+            json_match = re.search(r'({[\s\S]*})', result_text)
+            if json_match:
+                result_text = json_match.group(1)
+                
+            try:
+                result = json.loads(result_text)
+            except json.JSONDecodeError:
+                st.error("Error parsing Claude's response. Using fallback evaluation method.")
+                return analyze_presentation_fallback(presentation_text, transcript)
+            
+            # Ensure all expected fields are in the response
+            expected_sections = ["problem", "solution", "businessModel", "financials", "delivery"]
+            expected_props = ["score", "feedback"]
+            
+            for section in expected_sections:
+                if section not in result["sections"]:
+                    result["sections"][section] = {}
+                for prop in expected_props:
+                    if prop not in result["sections"][section]:
+                        if prop == "score":
+                            result["sections"][section][prop] = 70.0
+                        else:
+                            result["sections"][section][prop] = "No specific feedback provided."
+                            
+            # Round scores to 1 decimal place
+            result["overall"] = round(float(result["overall"]), 1)
+            for section in expected_sections:
+                result["sections"][section]["score"] = round(float(result["sections"][section]["score"]), 1)
+                
+            return result
+            
+    except Exception as e:
+        st.error(f"Error calling Claude API: {str(e)}")
+        # Fall back to the simpler analysis method
+        return analyze_presentation_fallback(presentation_text, transcript)
+    
+def analyze_presentation_fallback(presentation_text, transcript):
+    """
+    Fallback analysis method if Claude API call fails.
+    Uses basic text matching and rules to generate scores and feedback.
+    """
     # Check for key components in the problem section
     problem_indicators = [
         "problem", "challenge", "issue", "pain point", "inefficiency",
@@ -288,23 +453,33 @@ def analyze_presentation(presentation_text, transcript):
         "sections": {
             "problem": {
                 "score": round(problem_score, 1),
-                "feedback": feedback["problem"]
+                "feedback": feedback["problem"],
+                "strengths": ["Identifies a problem", "Includes some statistics"],
+                "improvements": ["Add more specific examples", "Quantify the impact more clearly"]
             },
             "solution": {
                 "score": round(solution_score, 1),
-                "feedback": feedback["solution"]
+                "feedback": feedback["solution"],
+                "strengths": ["Proposes a clear solution", "Mentions benefits"],
+                "improvements": ["Provide more evidence", "Compare with alternatives"]
             },
             "businessModel": {
                 "score": round(business_model_score, 1),
-                "feedback": feedback["businessModel"]
+                "feedback": feedback["businessModel"],
+                "strengths": ["Explains revenue mechanism", "Mentions target market"],
+                "improvements": ["Add customer acquisition strategy", "Provide more market validation"]
             },
             "financials": {
                 "score": round(financial_score, 1),
-                "feedback": feedback["financials"]
+                "feedback": feedback["financials"],
+                "strengths": ["Includes sales projections", "Mentions costs and margins"],
+                "improvements": ["Break down fixed costs", "Explain assumptions behind projections"]
             },
             "delivery": {
                 "score": round(delivery_score, 1),
-                "feedback": feedback["delivery"]
+                "feedback": feedback["delivery"],
+                "strengths": ["Reasonable length", "Clear structure"],
+                "improvements": ["Strengthen conclusion", "Improve pacing"]
             }
         }
     }
@@ -462,8 +637,8 @@ def main():
                         file_extension = os.path.splitext(audio_file.name)[1]
                         transcript = extract_audio_transcript(audio_file, file_extension)
                         
-                        # Analyze content
-                        evaluation_results = analyze_presentation(presentation_text, transcript)
+                        # Analyze content using Claude
+                        evaluation_results = analyze_presentation_with_claude(presentation_text, transcript)
                         
                         # Store results in session state
                         st.session_state.evaluation_results = evaluation_results
@@ -564,46 +739,35 @@ def main():
                 st.markdown("#### Feedback")
                 st.markdown(f'''<div class="feedback-box">{results["sections"][selected_section]["feedback"]}</div>''', unsafe_allow_html=True)
                 
-                # Display criteria checklist
-                st.markdown("#### Criteria")
+                # Display strengths and improvements (from Claude analysis)
+                col1, col2 = st.columns(2)
                 
-                criteria_met = section_score >= 80
+                with col1:
+                    st.markdown("#### Strengths")
+                    if "strengths" in results["sections"][selected_section]:
+                        strengths = results["sections"][selected_section]["strengths"]
+                        if isinstance(strengths, list) and strengths:
+                            for strength in strengths:
+                                st.markdown(f"✅ {strength}")
+                        else:
+                            st.markdown("No specific strengths highlighted.")
+                    else:
+                        # Fallback for older analysis format
+                        st.markdown("Detailed strengths analysis not available.")
                 
-                if selected_section == "problem":
-                    st.markdown('''
-                    <div class="criteria-item pass">Clearly identifies a significant problem</div>
-                    <div class="criteria-item pass">Uses statistics to demonstrate scale (70% user dissatisfaction)</div>
-                    <div class="criteria-item fail">Could provide more examples of inefficiency impacts</div>
-                    ''', unsafe_allow_html=True)
-                elif selected_section == "solution":
-                    st.markdown('''
-                    <div class="criteria-item pass">Solution directly addresses identified problem</div>
-                    <div class="criteria-item pass">Explains benefits clearly (50% time reduction)</div>
-                    <div class="criteria-item fail">Needs more evidence supporting effectiveness claims</div>
-                    ''', unsafe_allow_html=True)
-                elif selected_section == "businessModel":
-                    st.markdown('''
-                    <div class="criteria-item pass">Clear explanation of how business makes money</div>
-                    <div class="criteria-item pass">Provides market size and customer base data</div>
-                    <div class="criteria-item fail">Needs details on customer acquisition strategy</div>
-                    ''', unsafe_allow_html=True)
-                elif selected_section == "financials":
-                    st.markdown('''
-                    <div class="criteria-item pass">Complete breakdown of financial projections</div>
-                    <div class="criteria-item pass">Includes gross sales, COGS, margins and profit</div>
-                    <div class="criteria-item fail">Needs more detail on fixed cost breakdown</div>
-                    ''', unsafe_allow_html=True)
-                elif selected_section == "delivery":
-                    st.markdown('''
-                    <div class="criteria-item pass">Clear and concise delivery within time limit</div>
-                    <div class="criteria-item pass">Effective use of slides and visual aids</div>
-                    <div class="criteria-item fail">Could strengthen conclusion and call to action</div>
-                    ''', unsafe_allow_html=True)
-                
-                # Display improvement suggestions
-                st.markdown("#### Improvement Suggestions")
-                improvement_suggestion = get_improvement_suggestions(selected_section, section_score)
-                st.markdown(f'''<div class="improvement-box">{improvement_suggestion}</div>''', unsafe_allow_html=True)
+                with col2:
+                    st.markdown("#### Areas for Improvement")
+                    if "improvements" in results["sections"][selected_section]:
+                        improvements = results["sections"][selected_section]["improvements"]
+                        if isinstance(improvements, list) and improvements:
+                            for improvement in improvements:
+                                st.markdown(f"🔍 {improvement}")
+                        else:
+                            st.markdown("No specific improvements suggested.")
+                    else:
+                        # Fallback for older analysis format
+                        improvement_suggestion = get_improvement_suggestions(selected_section, section_score)
+                        st.markdown(f'''<div class="improvement-box">{improvement_suggestion}</div>''', unsafe_allow_html=True)
                 
                 st.markdown('</div>', unsafe_allow_html=True)
             
@@ -615,11 +779,28 @@ def main():
                 "Section": [s["label"] for s in sections],
                 "Weight": [s["weight"] for s in sections],
                 "Score": [results["sections"][s["id"]]["score"] for s in sections],
-                "Feedback": [results["sections"][s["id"]]["feedback"] for s in sections],
-                "Improvement": [get_improvement_suggestions(s["id"], results["sections"][s["id"]]["score"]) for s in sections]
+                "Feedback": [results["sections"][s["id"]]["feedback"] for s in sections]
             }
             
+            # Add strengths and improvements if available
+            if "strengths" in results["sections"]["problem"]:
+                report_data["Strengths"] = [
+                    ", ".join(results["sections"][s["id"]].get("strengths", [])) 
+                    for s in sections
+                ]
+                report_data["Improvements"] = [
+                    ", ".join(results["sections"][s["id"]].get("improvements", []))
+                    for s in sections
+                ]
+            
             report_df = pd.DataFrame(report_data)
+            
+            if "Strengths" not in report_df.columns:
+                report_df["Improvement"] = [
+                    get_improvement_suggestions(s["id"], results["sections"][s["id"]]["score"]) 
+                    for s in sections
+                ]
+                
             report_df["Weighted Score"] = [
                 results["sections"]["problem"]["score"] * 0.25,
                 results["sections"]["solution"]["score"] * 0.25,
